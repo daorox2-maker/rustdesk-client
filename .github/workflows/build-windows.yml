@@ -64,11 +64,13 @@ jobs:
       - name: Install LLVM
         run: |
           choco install -y llvm
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
 
 
       # ============================================================
-      # 6. INSTALAR VCPKG E DEPENDÊNCIAS
+      # 6. INSTALAR VCPKG
       # ============================================================
       - name: Install vcpkg dependencies
         working-directory: rustdesk
@@ -80,50 +82,75 @@ jobs:
 
           $vcpkgPath = "$env:USERPROFILE\vcpkg"
 
+
           if (Test-Path $vcpkgPath) {
             Remove-Item -Recurse -Force $vcpkgPath
           }
 
-          git clone https://github.com/microsoft/vcpkg $vcpkgPath
+
+          # Usar a versão recomendada pelo RustDesk
+          git clone `
+            --branch 2023.04.15 `
+            --depth=1 `
+            https://github.com/microsoft/vcpkg `
+            $vcpkgPath
+
 
           if (-not (Test-Path "$vcpkgPath\bootstrap-vcpkg.bat")) {
-            Write-Error "bootstrap-vcpkg.bat não encontrado"
+            Write-Error "bootstrap-vcpkg.bat não encontrado."
             exit 1
           }
 
+
           Write-Host "Executando bootstrap do vcpkg..."
 
-          & "$vcpkgPath\bootstrap-vcpkg.bat"
+
+          & "$vcpkgPath\bootstrap-vcpkg.bat" -disableMetrics
+
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Falha ao executar bootstrap do vcpkg."
             exit 1
           }
 
-          echo "VCPKG_ROOT=$vcpkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          echo "VCPKG_ROOT=$vcpkgPath" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
 
           $env:VCPKG_ROOT = $vcpkgPath
+
 
           Write-Host "VCPKG_ROOT configurado como:"
           Write-Host $env:VCPKG_ROOT
 
+
           Write-Host "========================================"
-          Write-Host "Instalando bibliotecas RustDesk"
+          Write-Host "Instalando dependências do RustDesk"
           Write-Host "========================================"
 
-          $packages = @(
-            "libvpx:x64-windows-static",
-            "libyuv:x64-windows-static",
-            "opus:x64-windows-static",
-            "aom:x64-windows-static"
-          )
 
-          & "$vcpkgPath\vcpkg.exe" install $packages
+          # IMPORTANTE:
+          # O RustDesk possui vcpkg.json.
+          # Portanto o vcpkg trabalha em MANIFEST MODE.
+          #
+          # Não devemos passar libvpx/libyuv/opus/aom
+          # como argumentos individuais.
+          #
+          # O vcpkg.json do próprio RustDesk informa
+          # quais dependências devem ser instaladas.
+
+
+          & "$vcpkgPath\vcpkg.exe" install `
+            --triplet=x64-windows-static `
+            --vcpkg-root="$vcpkgPath"
+
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Falha ao instalar as dependências do vcpkg."
             exit 1
           }
+
 
           Write-Host "========================================"
           Write-Host "VCPKG instalado com sucesso"
@@ -145,20 +172,23 @@ jobs:
           Write-Host "Configurando servidor CortenDesk"
           Write-Host "========================================"
 
+
           if (-not $env:RENDEZVOUS_SERVER) {
             Write-Error "RENDEZVOUS_SERVER não configurado."
             exit 1
           }
+
 
           if (-not $env:RS_PUB_KEY) {
             Write-Error "RS_PUB_KEY não configurado."
             exit 1
           }
 
+
           Write-Host "Servidor:"
           Write-Host $env:RENDEZVOUS_SERVER
 
-          Write-Host "Chave pública: configurada"
+          Write-Host "Chave pública configurada."
 
 
           $configFiles = Get-ChildItem `
@@ -179,7 +209,10 @@ jobs:
             Write-Host "Configurando:"
             Write-Host $file.FullName
 
-            $content = Get-Content $file.FullName -Raw
+
+            $content = Get-Content `
+              $file.FullName `
+              -Raw
 
 
             $content = $content -replace `
@@ -198,6 +231,7 @@ jobs:
               -Encoding UTF8
           }
 
+
           Write-Host "Servidor CortenDesk configurado."
 
 
@@ -211,17 +245,21 @@ jobs:
           New-Item `
             -ItemType Directory `
             -Force `
-            -Path target\release | Out-Null
+            -Path target\release |
+            Out-Null
+
 
           Invoke-WebRequest `
             -UseBasicParsing `
             -Uri "https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll" `
             -OutFile "target\release\sciter.dll"
 
+
           if (-not (Test-Path "target\release\sciter.dll")) {
             Write-Error "sciter.dll não foi baixado."
             exit 1
           }
+
 
           Write-Host "sciter.dll baixado com sucesso."
 
@@ -240,16 +278,20 @@ jobs:
           Write-Host "Compilando RustDesk"
           Write-Host "========================================"
 
+
           $env:VCPKG_ROOT = "$env:VCPKG_ROOT"
+
 
           cargo build `
             --release `
             --target x86_64-pc-windows-msvc
 
+
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Falha na compilação do RustDesk."
             exit 1
           }
+
 
           Write-Host "RustDesk compilado com sucesso."
 
@@ -264,6 +306,7 @@ jobs:
           Write-Host "========================================"
           Write-Host "Preparando CortenDesk.exe"
           Write-Host "========================================"
+
 
           $exe = "target\x86_64-pc-windows-msvc\release\rustdesk.exe"
 
@@ -287,8 +330,9 @@ jobs:
 
 
           Write-Host "========================================"
-          Write-Host "Executável gerado:"
+          Write-Host "Executável gerado"
           Write-Host "========================================"
+
 
           Get-Item "..\CortenDesk.exe" |
             Select-Object Name,Length
