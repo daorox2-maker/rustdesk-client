@@ -17,6 +17,9 @@ jobs:
 
     steps:
 
+      # ============================================================
+      # 1. BAIXAR CÓDIGO DO RUSTDESK
+      # ============================================================
       - name: Download RustDesk source
         uses: actions/checkout@v4
         with:
@@ -25,16 +28,28 @@ jobs:
           submodules: recursive
           path: rustdesk
 
+
+      # ============================================================
+      # 2. INSTALAR RUST
+      # ============================================================
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
+
+      # ============================================================
+      # 3. INSTALAR FLUTTER
+      # ============================================================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
 
+
+      # ============================================================
+      # 4. ATIVAR FLUTTER WINDOWS
+      # ============================================================
       - name: Enable Flutter Windows
         working-directory: rustdesk
         run: |
@@ -42,53 +57,109 @@ jobs:
           flutter --version
           flutter doctor -v
 
+
+      # ============================================================
+      # 5. INSTALAR LLVM / CLANG
+      # ============================================================
       - name: Install LLVM
         run: |
           choco install -y llvm
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+
+      # ============================================================
+      # 6. INSTALAR VCPKG E DEPENDÊNCIAS
+      # ============================================================
       - name: Install vcpkg dependencies
         working-directory: rustdesk
         run: |
-          Write-Host "Baixando vcpkg..."
 
-          git clone --branch 2023.04.15 --depth 1 https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
+          Write-Host "========================================"
+          Write-Host "Instalando vcpkg"
+          Write-Host "========================================"
 
-          Write-Host "Inicializando vcpkg..."
+          $vcpkgPath = "$env:USERPROFILE\vcpkg"
 
-          & "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          if (Test-Path $vcpkgPath) {
+            Remove-Item -Recurse -Force $vcpkgPath
+          }
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Falha ao inicializar o vcpkg."
+          git clone https://github.com/microsoft/vcpkg $vcpkgPath
+
+          if (-not (Test-Path "$vcpkgPath\bootstrap-vcpkg.bat")) {
+            Write-Error "bootstrap-vcpkg.bat não encontrado"
             exit 1
           }
 
-          echo "VCPKG_ROOT=$env:USERPROFILE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Executando bootstrap do vcpkg..."
 
-          Write-Host "Instalando dependências do RustDesk..."
+          & "$vcpkgPath\bootstrap-vcpkg.bat"
 
-          & "$env:USERPROFILE\vcpkg\vcpkg.exe" --disable-metrics install `
-            "libvpx:x64-windows-static" `
-            "libyuv:x64-windows-static" `
-            "opus:x64-windows-static" `
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Falha ao executar bootstrap do vcpkg."
+            exit 1
+          }
+
+          echo "VCPKG_ROOT=$vcpkgPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          $env:VCPKG_ROOT = $vcpkgPath
+
+          Write-Host "VCPKG_ROOT configurado como:"
+          Write-Host $env:VCPKG_ROOT
+
+          Write-Host "========================================"
+          Write-Host "Instalando bibliotecas RustDesk"
+          Write-Host "========================================"
+
+          $packages = @(
+            "libvpx:x64-windows-static",
+            "libyuv:x64-windows-static",
+            "opus:x64-windows-static",
             "aom:x64-windows-static"
+          )
+
+          & "$vcpkgPath\vcpkg.exe" install $packages
 
           if ($LASTEXITCODE -ne 0) {
             Write-Error "Falha ao instalar as dependências do vcpkg."
             exit 1
           }
 
-          Write-Host "Dependências vcpkg instaladas com sucesso."
+          Write-Host "========================================"
+          Write-Host "VCPKG instalado com sucesso"
+          Write-Host "========================================"
 
+
+      # ============================================================
+      # 7. CONFIGURAR SERVIDOR CORTENDESK
+      # ============================================================
       - name: Configure CortenDesk server
         working-directory: rustdesk
         env:
           RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+
         run: |
-          Write-Host "Configurando servidor CortenDesk..."
-          Write-Host "Servidor: $env:RENDEZVOUS_SERVER"
-          Write-Host "Chave: configurada"
+
+          Write-Host "========================================"
+          Write-Host "Configurando servidor CortenDesk"
+          Write-Host "========================================"
+
+          if (-not $env:RENDEZVOUS_SERVER) {
+            Write-Error "RENDEZVOUS_SERVER não configurado."
+            exit 1
+          }
+
+          if (-not $env:RS_PUB_KEY) {
+            Write-Error "RS_PUB_KEY não configurado."
+            exit 1
+          }
+
+          Write-Host "Servidor:"
+          Write-Host $env:RENDEZVOUS_SERVER
+
+          Write-Host "Chave pública: configurada"
+
 
           $configFiles = Get-ChildItem `
             -Recurse `
@@ -96,23 +167,30 @@ jobs:
             -Path "libs" `
             -Filter "config.rs"
 
+
           if ($configFiles.Count -eq 0) {
             Write-Error "Não encontrei config.rs"
             exit 1
           }
 
+
           foreach ($file in $configFiles) {
-            Write-Host "Configurando: $($file.FullName)"
+
+            Write-Host "Configurando:"
+            Write-Host $file.FullName
 
             $content = Get-Content $file.FullName -Raw
+
 
             $content = $content -replace `
               '(?m)^(\s*pub\s+const\s+DEFAULT_RENDEZVOUS_SERVER\s*:\s*&str\s*=\s*)"[^"]*"', `
               '$1"' + $env:RENDEZVOUS_SERVER + '"'
 
+
             $content = $content -replace `
               '(?m)^(\s*pub\s+const\s+DEFAULT_RS_PUB_KEY\s*:\s*&str\s*=\s*)"[^"]*"', `
               '$1"' + $env:RS_PUB_KEY + '"'
+
 
             Set-Content `
               -Path $file.FullName `
@@ -120,19 +198,20 @@ jobs:
               -Encoding UTF8
           }
 
-          Write-Host "Configuração CortenDesk concluída."
+          Write-Host "Servidor CortenDesk configurado."
 
+
+      # ============================================================
+      # 8. BAIXAR SCITER
+      # ============================================================
       - name: Download Sciter
         working-directory: rustdesk
         run: |
-          Write-Host "Criando diretório do Sciter..."
 
           New-Item `
             -ItemType Directory `
             -Force `
             -Path target\release | Out-Null
-
-          Write-Host "Baixando Sciter..."
 
           Invoke-WebRequest `
             -UseBasicParsing `
@@ -144,14 +223,24 @@ jobs:
             exit 1
           }
 
-          Write-Host "Sciter baixado com sucesso."
+          Write-Host "sciter.dll baixado com sucesso."
 
+
+      # ============================================================
+      # 9. COMPILAR RUSTDESK
+      # ============================================================
       - name: Build RustDesk
         working-directory: rustdesk
         env:
           VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+
         run: |
-          Write-Host "Iniciando compilação do RustDesk..."
+
+          Write-Host "========================================"
+          Write-Host "Compilando RustDesk"
+          Write-Host "========================================"
+
+          $env:VCPKG_ROOT = "$env:VCPKG_ROOT"
 
           cargo build `
             --release `
@@ -164,42 +253,62 @@ jobs:
 
           Write-Host "RustDesk compilado com sucesso."
 
+
+      # ============================================================
+      # 10. CRIAR CORTENDESK.EXE
+      # ============================================================
       - name: Prepare CortenDesk executable
         working-directory: rustdesk
         run: |
 
+          Write-Host "========================================"
+          Write-Host "Preparando CortenDesk.exe"
+          Write-Host "========================================"
+
           $exe = "target\x86_64-pc-windows-msvc\release\rustdesk.exe"
+
 
           if (-not (Test-Path $exe)) {
             Write-Error "rustdesk.exe não foi gerado."
             exit 1
           }
 
-          Write-Host "Executável RustDesk encontrado."
 
           Copy-Item `
             $exe `
             "..\CortenDesk.exe" `
             -Force
 
+
           Copy-Item `
             "target\release\sciter.dll" `
             "..\sciter.dll" `
             -Force
 
-          Write-Host "Executável CortenDesk preparado."
+
+          Write-Host "========================================"
+          Write-Host "Executável gerado:"
+          Write-Host "========================================"
 
           Get-Item "..\CortenDesk.exe" |
             Select-Object Name,Length
 
+
           Get-Item "..\sciter.dll" |
             Select-Object Name,Length
 
+
+      # ============================================================
+      # 11. DISPONIBILIZAR ARQUIVOS PARA DOWNLOAD
+      # ============================================================
       - name: Upload CortenDesk
         uses: actions/upload-artifact@v4
+
         with:
           name: CortenDesk-Windows-x64
+
           path: |
             CortenDesk.exe
             sciter.dll
+
           if-no-files-found: error
